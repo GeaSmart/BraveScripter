@@ -3,18 +3,23 @@ using Dapper;
 using ExcelDataReader;
 using System.Data;
 
-
 class Program
 {
     static void Main()
     {
         string excelPath = Path.Combine(Directory.GetCurrentDirectory(), "Excel", "Datos.xlsx");
         string outputSqlPath = Path.Combine(Directory.GetCurrentDirectory(), "Excel", "InsertScripts.sql");
-        string connectionString = "Server=.;Database=QuickTest;User Id=sa;Password=EC1admin;trust server certificate=true";
-        string tablaDestino = "SAP_INSP_AREA";
+        string connectionString =
+            "Server=.;Database=db;User Id=sa;Password=*****;trust server certificate=true";
+        //Lista de tablas a procesar, cada tabla debe tener una hoja en Datos.xlsx con el mismo nombre conteniendo los datos
+        string[] tablasDestino = ["tabla1", "tabla2"];
 
-        Console.WriteLine($"📂 Directorio actual: {Directory.GetCurrentDirectory()}");
-        Console.WriteLine($"📂 Leyendo archivo: {excelPath}");
+        Console.WriteLine($"***** Brave Scripter *****");
+        Console.WriteLine($"==========================");
+
+        Console.WriteLine($"Directorio actual: {Directory.GetCurrentDirectory()}");
+        Console.WriteLine($"Leyendo archivo: {excelPath}");
+        Console.WriteLine($"Se generarán scripts para las siguientes tablas: {string.Join(",", tablasDestino)}");
 
         if (ConfirmarContinuacion())
         {
@@ -22,67 +27,83 @@ class Program
             {
                 try
                 {
-                    var columnasSql = ObtenerColumnasSql(connectionString, tablaDestino, out string? columnaAutoIncremental);
-                    var datosExcel = LeerExcel(excelPath, columnasSql);
-                    var scripts = GenerarInsertScripts(tablaDestino, datosExcel, columnaAutoIncremental);
+                    var columnasPorTabla = ObtenerColumnasSql(connectionString, tablasDestino);
+                    var scriptsGenerales = new List<string>();
 
-                    File.WriteAllLines(outputSqlPath, scripts);
-                    Console.WriteLine($"✅ Scripts generados en: {outputSqlPath}");
+                    using var stream = File.Open(excelPath, FileMode.Open, FileAccess.Read);
+                    using var reader = ExcelReaderFactory.CreateReader(stream);
+                    var dataSet = reader.AsDataSet(new ExcelDataSetConfiguration()
+                    {
+                        ConfigureDataTable = (_) => new ExcelDataTableConfiguration() { UseHeaderRow = true }
+                    });
+
+                    foreach (var tabla in tablasDestino)
+                    {
+                        var hoja = dataSet.Tables[tabla]; // Buscar hoja con el mismo nombre de la tabla
+                        if (hoja != null)
+                        {
+                            var (columnasValidas, columnaAutoIncremental) = columnasPorTabla[tabla];
+                            var datosExcel = LeerExcel(hoja, columnasValidas);
+                            var scripts = GenerarInsertScripts(tabla, datosExcel, columnaAutoIncremental);
+                            scriptsGenerales.AddRange(scripts);
+                        }
+                        else
+                        {
+                            Console.WriteLine($"No se encontró la hoja '{tabla}' en el Excel.");
+                        }
+                    }
+
+                    File.WriteAllLines(outputSqlPath, scriptsGenerales);
+                    Console.WriteLine($"Scripts generados en: {outputSqlPath}");
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"⛔ Error: {ex.Message}");
+                    Console.WriteLine($"Error: {ex.Message}");
                 }
             }
             else
             {
-                Console.WriteLine($"⛔ No se encontró el archivo en: {excelPath}");
+                Console.WriteLine($"No se encontró el archivo en: {excelPath}");
             }
         }
     }
 
-    static List<string> ObtenerColumnasSql(string connectionString, string tabla, out string? columnaAutoIncremental)
+    static Dictionary<string, (List<string> columnas, string? columnaAutoIncremental)> ObtenerColumnasSql(string connectionString, string[] tablas)
     {
         using var connection = new SqlConnection(connectionString);
         connection.Open();
 
-        var columnas = connection.Query<(string ColumnName, int IsIdentity)>(
-            @"SELECT COLUMN_NAME AS ColumnName, COLUMNPROPERTY(OBJECT_ID(@tabla), COLUMN_NAME, 'IsIdentity') AS IsIdentity
-              FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = @tabla",
-            new { tabla }).ToList();
+        var resultado = new Dictionary<string, (List<string>, string?)>();
 
-        // Determinar si hay una columna autoincremental
-        columnaAutoIncremental = columnas.FirstOrDefault(c => c.IsIdentity == 1).ColumnName;
+        foreach (var tabla in tablas)
+        {
+            var columnas = connection.Query<(string ColumnName, int IsIdentity)>(
+                @"SELECT COLUMN_NAME AS ColumnName, COLUMNPROPERTY(OBJECT_ID(@tabla), COLUMN_NAME, 'IsIdentity') AS IsIdentity
+                  FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = @tabla",
+                new { tabla }).ToList();
 
-        // Devolver solo las columnas que no son autoincrementales
-        return columnas.Where(c => c.IsIdentity == 0).Select(c => c.ColumnName).ToList();
+            string? columnaAutoIncremental = columnas.FirstOrDefault(c => c.IsIdentity == 1).ColumnName;
+            var columnasValidas = columnas.Where(c => c.IsIdentity == 0).Select(c => c.ColumnName).ToList();
+
+            resultado[tabla] = (columnasValidas, columnaAutoIncremental);
+        }
+
+        return resultado;
     }
 
-    static List<Dictionary<string, object>> LeerExcel(string filePath, List<string> columnasValidas)
+    static List<Dictionary<string, object>> LeerExcel(System.Data.DataTable hoja, List<string> columnasValidas)
     {
         var resultado = new List<Dictionary<string, object>>();
-        System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance);
-
-        using var stream = File.Open(filePath, FileMode.Open, FileAccess.Read);
-        using var reader = ExcelReaderFactory.CreateReader(stream);
-        var dataSet = reader.AsDataSet(new ExcelDataSetConfiguration()
-        {
-            ConfigureDataTable = (_) => new ExcelDataTableConfiguration() { UseHeaderRow = true }
-        });
-
-        var table = dataSet.Tables[0];
         var columnasExcel = new List<string>();
 
-        // Filtrar las columnas que existen en la tabla destino
-        foreach (DataColumn col in table.Columns)
+        foreach (DataColumn col in hoja.Columns)
         {
             string columnName = col.ColumnName.Trim();
             if (columnasValidas.Contains(columnName))
                 columnasExcel.Add(columnName);
         }
 
-        // Leer filas de datos
-        foreach (DataRow row in table.Rows)
+        foreach (DataRow row in hoja.Rows)
         {
             var fila = new Dictionary<string, object>();
             foreach (var columna in columnasExcel)
@@ -101,7 +122,6 @@ class Program
 
         foreach (var fila in datos)
         {
-            // Excluir la columna autoincremental si existe
             var columnas = fila.Keys.Where(k => k != columnaAutoIncremental);
             var valores = columnas.Select(col => fila[col] is string ? $"'{fila[col]}'" : fila[col]?.ToString() ?? "NULL");
 
