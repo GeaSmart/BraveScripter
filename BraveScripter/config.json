@@ -1,0 +1,6 @@
+{
+  "ExcelPath": "InputOutputFiles/Datos.xlsx",
+  "OutputSqlPath": "InputOutputFiles/InsertScripts.sql",
+  "ConnectionString": "Server=.;Database=db;User Id=user;Password=*****;trust server certificate=true",
+  "TablasDestino": [ "tabla1", "tabla2"]
+}

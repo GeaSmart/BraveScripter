@@ -2,17 +2,31 @@
 using Dapper;
 using ExcelDataReader;
 using System.Data;
+using System.Text.Json;
 
 class Program
 {
     static void Main()
     {
-        string excelPath = Path.Combine(Directory.GetCurrentDirectory(), "Excel", "Datos.xlsx");
-        string outputSqlPath = Path.Combine(Directory.GetCurrentDirectory(), "Excel", "InsertScripts.sql");
-        string connectionString =
-            "Server=.;Database=db;User Id=sa;Password=*****;trust server certificate=true";
-        //Lista de tablas a procesar, cada tabla debe tener una hoja en Datos.xlsx con el mismo nombre conteniendo los datos
-        string[] tablasDestino = ["tabla1", "tabla2"];
+        string configPath = Path.Combine(Directory.GetCurrentDirectory(), "config.json");
+        if (!File.Exists(configPath))
+        {
+            Console.WriteLine("Error: No se encontró config.json");
+            return;
+        }
+
+        var config = JsonSerializer.Deserialize<Dictionary<string, object>>(File.ReadAllText(configPath))!;
+        string excelPath = Path.Combine(Directory.GetCurrentDirectory(), config["ExcelPath"].ToString()!);
+        string outputSqlPath = Path.Combine(Directory.GetCurrentDirectory(), config["OutputSqlPath"].ToString()!);
+        string connectionString = config["ConnectionString"].ToString()!;
+        string[] tablasDestino = JsonSerializer.Deserialize<string[]>(config["TablasDestino"].ToString()!)!;
+
+        //string excelPath = Path.Combine(Directory.GetCurrentDirectory(), "Excel", "Datos.xlsx");
+        //string outputSqlPath = Path.Combine(Directory.GetCurrentDirectory(), "Excel", "InsertScripts.sql");
+        //string connectionString =
+        //    "Server=.;Database=db;User Id=sa;Password=*****;trust server certificate=true";
+        ////Lista de tablas a procesar, cada tabla debe tener una hoja en Datos.xlsx con el mismo nombre conteniendo los datos
+        //string[] tablasDestino = ["tabla1", "tabla2"];
 
         Console.WriteLine($"***** Brave Scripter *****");
         Console.WriteLine($"==========================");
@@ -66,6 +80,8 @@ class Program
                 Console.WriteLine($"No se encontró el archivo en: {excelPath}");
             }
         }
+        Console.WriteLine("Pulse una tecla para salir...");
+        Console.ReadKey();
     }
 
     static Dictionary<string, (List<string> columnas, string? columnaAutoIncremental)> ObtenerColumnasSql(string connectionString, string[] tablas)
